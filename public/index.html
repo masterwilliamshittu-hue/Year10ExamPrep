@@ -838,8 +838,30 @@ function genericQ(s){return Q[s]||[["Which is the strongest approach to a GCSE r
 let state, profile, currentQuiz=[];
 const $=id=>document.getElementById(id);
 const getProfileKey=()=>`y10hub_profile_${profile}`;
-function defaultState(){return {name:profile,subjects:[],homeworkDays:[],dayMap:{},deadlines:{},completed:{},answered:0,correct:0,questionSeen:{},weak:{},marks:[],theme:"light",syllabusDone:{}}}
-function load(){try{return JSON.parse(localStorage.getItem(getProfileKey()))||defaultState()}catch{return defaultState()}}
+function defaultState(){return {name:profile,subjects:[],homeworkDays:[],dayMap:{},deadlines:{},paperScheduleVersion:2,completed:{},answered:0,correct:0,questionSeen:{},weak:{},marks:[],theme:"light",syllabusDone:{}}}
+function staggerPaperDeadlines(target){
+  const start=new Date();
+  start.setHours(12,0,0,0);
+  target.deadlines=target.deadlines||{};
+  (target.subjects||[]).forEach((subject,index)=>{
+    const due=new Date(start);
+    due.setDate(due.getDate()+24+(index*7));
+    target.deadlines[subject.name]=`${due.getFullYear()}-${String(due.getMonth()+1).padStart(2,"0")}-${String(due.getDate()).padStart(2,"0")}`;
+  });
+  target.paperScheduleVersion=2;
+}
+function load(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(getProfileKey()));
+    if(!saved) return defaultState();
+    // One-time repair for profiles created before the weekly countdown schedule.
+    if(saved.paperScheduleVersion!==2){
+      staggerPaperDeadlines(saved);
+      localStorage.setItem(getProfileKey(),JSON.stringify(saved));
+    }
+    return saved;
+  }catch{return defaultState()}
+}
 function save(){localStorage.setItem(getProfileKey(),JSON.stringify(state));renderAll()}
 async function passwordDigest(value){const bytes=new TextEncoder().encode(value);const hash=await crypto.subtle.digest("SHA-256",bytes);return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("")}
 function auth(mode){$("authForm").innerHTML=`<h2>${mode==="signup"?"Create account":"Log in"}</h2><div class="field"><label>Username</label><input id="authUser" autocomplete="username" placeholder="Choose a username"></div><div class="field"><label>Password</label><input id="authPass" type="password" autocomplete="${mode==="signup"?"new-password":"current-password"}" placeholder="Password"></div><button class="btn" id="authSubmit">${mode==="signup"?"Create profile":"Log in"}</button><p id="authError" class="notice"></p>`;$("authSubmit").onclick=async()=>{let u=$("authUser").value.trim().toLowerCase(),p=$("authPass").value;if(!u||!p){$("authError").textContent="Enter a username and password.";return}let users=JSON.parse(localStorage.getItem("y10hub_users")||"{}");let digest=await passwordDigest(p);if(mode==="signup"){if(users[u]){$("authError").textContent="That username already exists on this device.";return}users[u]=digest;localStorage.setItem("y10hub_users",JSON.stringify(users))}else if(users[u]!==digest){$("authError").textContent="Username or password is incorrect.";return}profile=u;localStorage.setItem("y10hub_current",u);state=load();enterApp()}}
@@ -862,14 +884,8 @@ function saveSubjects(){
     }).filter(Boolean);
     if(!chosen.length){ alert("Select at least one subject before saving."); return; }
     state.subjects=chosen;
-    // Stagger each selected subject's paper by exactly one week.
-    const firstPaperDate=new Date();
-    firstPaperDate.setHours(12,0,0,0);
-    chosen.forEach((s,index)=>{
-      const d=new Date(firstPaperDate);
-      d.setDate(d.getDate()+(index+1)*7);
-      state.deadlines[s.name]=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    });
+    // First selected subject is due in 24 days; each following subject is 7 days later.
+    staggerPaperDeadlines(state);
     localStorage.setItem(getProfileKey(),JSON.stringify(state));
     renderAll();
     alert(`Saved ${chosen.length} subject${chosen.length===1?"":"s"} successfully.`);
@@ -882,7 +898,7 @@ function buildTimetable(){let chosen=state.subjects;let html=`<div class="field"
 function autoPlan(){let homes=[...document.querySelectorAll("[data-home]:checked")].map(x=>x.dataset.home);if(homes.length>2){alert("Choose no more than two Homework Days first.");return}let available=DAYS.filter(d=>!homes.includes(d));state.homeworkDays=homes;state.dayMap={};DAYS.forEach(d=>state.dayMap[d]=[]);state.subjects.forEach(s=>available.slice(0,5).forEach(d=>state.dayMap[d].push(s.name)));buildTimetable();alert("Each subject has been placed on five available revision days. You can customise the plan before saving.");}
 function saveTimetable(){let homes=[...document.querySelectorAll("[data-home]:checked")].map(x=>x.dataset.home);if(homes.length>2){alert("Choose no more than two Homework Days.");return}state.homeworkDays=homes;state.dayMap={};DAYS.forEach(d=>state.dayMap[d]=[...document.querySelectorAll(`[data-day="${d}"]:checked`)].map(x=>x.dataset.name));homes.forEach(d=>state.dayMap[d]=[]);save();alert("Timetable saved.");}
 function daysLeft(date){return Math.ceil((new Date(date+"T23:59:59")-new Date())/86400000)}
-function paperMarkup(s){let date=state.deadlines[s.name];let n=date?daysLeft(date):0;let due=n<0?`Overdue by ${Math.abs(n)} days`:n===0?"Due today":`Due in ${n} days`;let isRE=/^(re|religious studies|religion)$/i.test(s.name.trim());let resource=isRE?"https://senecalearning.com/":"https://www.mathsgenie.co.uk/";let resourceName=isRE?"Seneca":"Maths Genie";return `<div class="paper"><div><b>${s.icon} ${s.name} · ${s.tier}</b><div class="muted">${resourceName} past-paper practice</div><div class="count">${due}</div><div class="notice"><a href="${resource}" target="_blank" rel="noopener">Open ${resourceName} ↗</a></div></div><div class="field"><label>Deadline</label><input type="date" data-deadline="${s.name}" value="${date||""}"><label>Paper mark (optional)</label><input type="number" min="0" max="300" placeholder="Enter mark" data-mark="${s.name}"><button class="btn alt" data-completepaper="${s.name}">Record completed paper</button></div></div>`}
+function paperMarkup(s){let date=state.deadlines[s.name];let n=date?daysLeft(date):0;let due=n<0?`Overdue by ${Math.abs(n)} days`:n===0?"Due today":`Due in ${n} days`;let isRE=/^(re|religious studies|religion)$/i.test(s.name.trim());let resource=isRE?"https://senecalearning.com/":"https://www.mathsgenie.co.uk/";let resourceName=isRE?"Seneca":"Maths Genie";return `<div class="paper"><div><b>${s.icon} ${s.name} · ${s.tier}</b><div class="muted">${resourceName} past-paper practice</div><div class="count">${due}</div><div class="notice"><a href="${resource}" target="_blank" rel="noopener">Open ${s.name} past papers ↗</a></div></div><div class="field"><label>Deadline</label><input type="date" data-deadline="${s.name}" value="${date||""}"><label>Paper mark (optional)</label><input type="number" min="0" max="300" placeholder="Enter mark" data-mark="${s.name}"><button class="btn alt" data-completepaper="${s.name}">Record completed paper</button></div></div>`}
 function renderPapers(){ $("paperList").innerHTML=state.subjects.length?state.subjects.map(paperMarkup).join(""):"<p class='muted'>Choose subjects first to create countdowns.</p>";document.querySelectorAll("[data-deadline]").forEach(x=>x.onchange=()=>{state.deadlines[x.dataset.deadline]=x.value;save()});document.querySelectorAll("[data-completepaper]").forEach(x=>x.onclick=()=>{let s=x.dataset.completepaper,inp=$(`[data-mark="${s}"]`),mark=inp.value;state.marks.push({subject:s,mark:mark===""?null:Number(mark),date:new Date().toISOString().slice(0,10)});let previous=new Date((state.deadlines[s]||new Date().toISOString().slice(0,10))+"T12:00:00");let today=new Date();today.setHours(12,0,0,0);if(previous<today)previous=today;let d=new Date(previous);d.setDate(d.getDate()+Math.max(1,state.subjects.length)*7);state.deadlines[s]=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;save();alert("Paper recorded. Its next paper is scheduled one full subject-cycle later.");})}
 function renderDash(){ $("hello").textContent=`Let's make progress${state.name?" , "+state.name:""}.`;let total=Object.keys(state.completed).length;$("statLessons").textContent=total;$("statQuestions").textContent=state.answered;$("statAccuracy").textContent=state.answered?Math.round(state.correct/state.answered*100)+"%":"—";$("statSubjects").textContent=state.subjects.length;$("dashSubjects").innerHTML=state.subjects.map(s=>`<div class="subject"><div><b>${s.icon} ${s.name}</b><small>${s.board} · ${s.tier}</small></div><button class="btn alt" data-start="${s.name}">Start</button></div>`).join("")||"Choose your subjects to get started.";$("dashPapers").innerHTML=state.subjects.slice(0,4).map(s=>`<div class="paper"><b>${s.name}</b><span class="tag">${daysLeft(state.deadlines[s.name])} days</span></div>`).join("")||"No countdowns yet.";$("dashPlan").innerHTML=DAYS.map(d=>`<div class="paper"><b>${d}${state.homeworkDays.includes(d)?" · Homework Day":""}</b><span>${(state.dayMap[d]||[]).join(", ")|| (state.homeworkDays.includes(d)?"School homework":"No subjects assigned")}</span></div>`).join("")}
 function fillLessonSelect(){let sel=$("lessonSubject");sel.innerHTML=state.subjects.map(s=>`<option>${s.name}</option>`).join("");if(!state.subjects.length) $("lessonContent").innerHTML="Choose subjects first."}
